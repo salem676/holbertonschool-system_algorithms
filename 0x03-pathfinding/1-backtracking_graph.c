@@ -1,71 +1,170 @@
 #include "pathfinding.h"
+/* malloc free */
+#include <stdlib.h>
+/* printf */
+#include <stdio.h>
+/* strcmp strdup */
+#include <string.h>
 
-static char *g_visited;
-static queue_t *g_path;
-static vertex_t const *g_target;
-static graph_t *g_graph;
 
 /**
- * backtracking_graph - uses backtracking to find path through graph
- * @graph: pointer to graph struct
- * @start: pointer to starting vertex
- * @target: pointer to target vertex
- * Return: queue of vertices forming path
- */
-queue_t *backtracking_graph(graph_t *graph, vertex_t const *start,
-	vertex_t const *target)
+  * backtrackPath - deletes record of path traveled from dead end back to last
+  *   junction point
+  *
+  * @path: queue of visited graph node content, represents current backtracking
+  *   solution candidate
+  * @last_fork: vertex at last junction point
+  */
+void backtrackPath(queue_t *path, const vertex_t *last_fork)
 {
-	queue_t *reverse_path = NULL;
+	queue_node_t *node = NULL;
+	char *vertex_content = NULL;
 
-	if (!graph || !start || !target)
-		return (NULL);
+	if (!path || !path->front || !path->back || !last_fork)
+		return;
 
-	setbuf(stdout, NULL);
-	g_visited = calloc(graph->nb_vertices, sizeof(*g_visited));
-	g_path = queue_create();
-	if (!g_visited || !g_path)
-		exit(1);
-	g_target = target;
-	g_graph = graph;
-	if (dfs(start))
+	node = path->back;
+	if (node)
+		vertex_content = (char *)node->ptr;
+
+	while (node && vertex_content &&
+	       strcmp(vertex_content, last_fork->content) != 0)
 	{
-		char *city;
+		/* dequeue from back */
+		if (node && node->prev)
+			node->prev->next = NULL;
+		path->back = node->prev;
+		if (path->back == NULL)
+			path->front = NULL;
 
-		reverse_path = queue_create();
-		if (!reverse_path)
-			exit(1);
-		for (city = dequeue(g_path); city; city = dequeue(g_path))
-			if (!queue_push_front(reverse_path, city))
-				exit(1);
+		free(node);
+		free(vertex_content);
+
+		node = path->back;
+		if (node)
+			vertex_content = (char *)node->ptr;
 	}
-	queue_delete(g_path);
-	free(g_visited);
-	return (reverse_path);
 }
 
-/**
- * dfs - uses DFS backtracking to find path
- * @vertex: current vertex to traverse
- * Return: 1 if destination found else 0
- */
-int dfs(vertex_t const *vertex)
-{
-	char *city;
-	edge_t *edge;
 
-	if (g_visited[vertex->index])
+/**
+  * isVisitedVertex - checks a queue with `void *` data points, assuming
+  *   they are all castable to `vertex_t *`, to find a vertex with content
+  *   matching `vertex`
+  *
+  * @path: queue to search
+  * @vertex: vertex containing data to search for
+  * Return: first queue node containing matching data, or NULL on failure
+  */
+queue_node_t *isVisitedVertex(queue_t *path, const vertex_t *vertex)
+{
+	queue_node_t *temp = NULL;
+	char *vertex_content = NULL;
+
+	if (!path || !path->front || !path->back || !vertex)
+		return (NULL);
+
+	temp = path->front;
+	while (temp)
+	{
+		if (temp->ptr)
+		{
+			vertex_content = (char *)temp->ptr;
+
+			if (strcmp(vertex->content, vertex_content) == 0)
+				return (temp);
+		}
+
+		temp = temp->next;
+	}
+
+	return (NULL);
+}
+
+
+/**
+  * graphDFS - helper to backtracking_graph, searches for the
+  *   first path from a starting point to a target point within a
+  *   graph using a recursive depth-first search
+  *
+  * @path: queue of nodes visited, represents current candidate solution
+  * @curr: current vertex in graph
+  * @target: target vertex in graph
+  * Return: 1 if target found at or below current recursion frame,
+  *   0 if not or failure
+  */
+int graphDFS(queue_t *path, const vertex_t *curr, const vertex_t *target)
+{
+	char *content_copy = NULL;
+	int target_found = 0;
+	edge_t *temp_e = NULL;
+
+	if (!path || !curr || !target)
 		return (0);
-	printf("Checking %s\n", vertex->content);
-	g_visited[vertex->index] = 1;
-	city = strdup(vertex->content);
-	if (!city)
-		exit(1);
-	queue_push_front(g_path, city);
-	if (vertex == g_target)
+
+	printf("Checking %s\n", curr->content);
+
+	content_copy = strdup(curr->content);
+	if (!content_copy)
+	{
+		perror("graphDFS: strdup");
+		return (0);
+	}
+	if (!queue_push_back(path, (void *)content_copy))
+	{
+		free(content_copy);
+		return (0);
+	}
+
+	if (strcmp(curr->content, target->content) == 0)
 		return (1);
-	for (edge = vertex->edges; edge; edge = edge->next)
-		if (dfs(edge->dest))
-			return (1);
-	free(dequeue(g_path));
-	return (0);
+
+	for (temp_e = curr->edges; !target_found && temp_e;
+	     temp_e = temp_e->next)
+	{
+		if (!isVisitedVertex(path, temp_e->dest))
+		{
+			target_found |= graphDFS(path, temp_e->dest, target);
+
+			if (!target_found)
+				backtrackPath(path, curr);
+		}
+	}
+
+	return (target_found);
+}
+
+
+/**
+  * backtracking_graph - searches for the first path from a starting point to
+  *   a target point in a graph
+  *
+  * @graph: pointer to the graph to traverse
+  * @start: pointer to starting vertex
+  * @target: pointer to target vertex
+  * Return: returns a queue in which each node is a `char *` corresponding to a
+  *   vertex, forming a path from start to target, or NULL on failure
+  */
+queue_t *backtracking_graph(graph_t *graph, vertex_t const *start,
+			    vertex_t const *target)
+{
+	queue_t *path = NULL;
+
+	if (!graph || !graph->nb_vertices || !graph->vertices ||
+	    !start || !target)
+		return (NULL);
+
+	path = queue_create();
+	if (!path)
+		return (NULL);
+
+	if (!graphDFS(path, start, target))
+	{
+		while (path->front)
+			free(dequeue(path));
+		queue_delete(path);
+		return (NULL);
+	}
+
+	return (path);
 }
